@@ -7,30 +7,34 @@ const STATUS = {
 
 class CustomPromise {
   constructor (fn) {
-    this.state = STATUS.PENDING
+    // 初始状态为 pending
+    this.status = STATUS.PENDING
     this.value = null
     this.reason = null
+    // fulfilled 队列
     this.onFulfilledCallbacks = []
+    // rejected 队列
     this.onRejectedCallbacks = []
 
     const resolve = value => {
-      if (this.state === STATUS.PENDING) {
-        this.state = STATUS.FULFILLED
-        this.value = value
-        queueMicrotask(() => {
+      // 微任务
+      queueMicrotask(() => {
+        if (this.status === STATUS.PENDING) {
+          this.status = STATUS.FULFILLED
+          this.value = value
           this.onFulfilledCallbacks.forEach(cb => (cb(value)))
-        }, 0)
-      }
+        }
+      })
     }
 
     const reject = reason => {
-      if (this.state === STATUS.PENDING) {
-        this.state = STATUS.REJECTED
-        this.reason = reason
-        queueMicrotask(() => {
+      queueMicrotask(() => {
+        if (this.status === STATUS.PENDING) {
+          this.status = STATUS.REJECTED
+          this.reason = reason
           this.onRejectedCallbacks.forEach(cb => (cb(reason)))
-        }, 0)
-      }
+        }
+      })
     }
 
     try {
@@ -48,14 +52,13 @@ function then (onFulfilled, onRejected) {
 
   // 为了链式调用，返回一个新的 Promise
   const promise2 = new CustomPromise((resolve, reject) => {
-    switch (this.state) {
+    switch (this.status) {
       // 如果状态为 fulfilled（一开始就调用了 resolve）
       case STATUS.FULFILLED:
         try {
-          setTimeout(() => {
-            const result = onFulfilledCallback(this.value)
-            resolvePromise(promise2, result, resolve, reject)
-          }, 0)
+          queueMicrotask(() => {
+            resolvePromise(promise2, null, resolve, reject)
+          })
         } catch (error) {
           reject(error)
         }
@@ -64,10 +67,9 @@ function then (onFulfilled, onRejected) {
         // 如果状态为 fulfilled（一开始就调用了 reject））
       case STATUS.REJECTED:
         try {
-          setTimeout(() => {
-            const result = onRejectedCallback(this.reason)
-            resolvePromise(promise2, result, resolve, reject)
-          }, 0)
+          queueMicrotask(() => {
+            resolvePromise(promise2, null, resolve, reject)
+          })
         } catch (error) {
           reject(error)
         }
@@ -77,24 +79,27 @@ function then (onFulfilled, onRejected) {
       case STATUS.PENDING:
         this.onFulfilledCallbacks.push(value => {
           try {
-            setTimeout(() => {
+            queueMicrotask(() => {
               const result = onFulfilledCallback(value)
               resolvePromise(promise2, result, resolve, reject)
-            }, 0)
+            })
           } catch (error) {
             reject(error)
           }
         })
-        this.onRejectedCallbacks.push(reason => {
-          try {
-            setTimeout(() => {
-              const result = onRejectedCallback(reason)
-              resolvePromise(promise2, result, resolve, reject)
-            }, 0)
-          } catch (error) {
-            reject(error)
-          }
-        })
+
+        if (typeof onRejected === 'function') {
+          this.onRejectedCallbacks.push(reason => {
+            try {
+              queueMicrotask(() => {
+                const result = onRejectedCallback(reason)
+                resolvePromise(promise2, result, resolve, reject)
+              })
+            } catch (error) {
+              reject(error)
+            }
+          })
+        }
     }
   })
 

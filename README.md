@@ -10,57 +10,49 @@ Promise 有三种状态，分别是：
 
 状态只能从 pending 转换为 fulfilled 或 rejected，转换后不能再次转换。
 
-state.js：
-
 ```js
-const PENDING = 'pending'
-const FULFILLED = 'fulfilled'
-const REJECTED = 'rejected'
-
-module.exports = {
-  PENDING,
-  FULFILLED,
-  REJECTED
+const STATUS = {
+  PENDING: 'pending', // 初始状态，未调用 resolve 或者 reject。
+  FULFILLED: 'fulfilled', // 调用了 resolve 后。
+  REJECTED: 'rejected' // 调用了 reject 后。
 }
 ```
 
 Promise 构造函数的参数是一个函数，创建实例时执行，函数有两个参数，分别为 resolve 和 reject。
 
-Promise.js：
-
 ```js
-const { PENDING, FULFILLED, REJECTED } = require('./state')
-
-class Promise {
+class CustomPromise {
   constructor (fn) {
-    this.state = PENDING
+    // 初始状态为 pending
+    this.status = STATUS.PENDING
     this.value = null
     this.reason = null
+    // fulfilled 队列
     this.onFulfilledCallbacks = []
+    // rejected 队列
     this.onRejectedCallbacks = []
 
     const resolve = value => {
-      // 模拟微任务
-      setTimeout(() => {
-        if (this.state === PENDING) {
-          this.state = FULFILLED
+      // 微任务
+      queueMicrotask(() => {
+        if (this.status === STATUS.PENDING) {
+          this.status = STATUS.FULFILLED
           this.value = value
           this.onFulfilledCallbacks.forEach(cb => (cb(value)))
         }
-      }, 0)
+      })
     }
 
     const reject = reason => {
-      setTimeout(() => {
-        if (this.state === PENDING) {
-          this.state = REJECTED
+      queueMicrotask(() => {
+        if (this.status === STATUS.PENDING) {
+          this.status = STATUS.REJECTED
           this.reason = reason
           this.onRejectedCallbacks.forEach(cb => (cb(reason)))
         }
-      }, 0)
+      })
     }
 
-    // 捕获异常，交给 Promise 处理
     try {
       fn(resolve, reject)
     } catch (error) {
@@ -68,8 +60,6 @@ class Promise {
     }
   }
 }
-
-module.exports = Promise
 ```
 
 Promise 拥有 then 方法，为了可以链式调用，then 方法的返回值为一个新的 Promise，编写 then 时要注意几点：
@@ -137,77 +127,76 @@ const p = new Promise((resolve, reject) => {
 })
 ```
 
-then.js：
+then：
 
 ```js
-const { PENDING, FULFILLED, REJECTED } = require('./state')
-const Promise = require('./Promise')
-const resolvePromise = require('./resolvePromise')
-
-module.exports = function (onFulfilled, onRejected) {
+function then (onFulfilled, onRejected) {
   // 默认值
-  const onFulfilledCallback = isFunction(onFulfilled) ? onFulfilled : value => value
-  const onRejectedCallback = isFunction(onRejected) ? onRejected : reason => { throw reason }
+  const onFulfilledCallback = typeof onFulfilled === 'function' ? onFulfilled : value => value
+  const onRejectedCallback = typeof onRejected === 'function' ? onRejected : reason => { throw reason }
 
   // 为了链式调用，返回一个新的 Promise
-  const promise2 = new Promise((resolve, reject) => {
-    setTimeout(() => {
-      switch (this.state) {
-        // 如果状态为 fulfilled（一开始就调用了 resolve）
-        case FULFILLED:
-          try {
-            const result = onFulfilledCallback(this.value)
-            resolvePromise(promise2, result, resolve, reject)
-          } catch (error) {
-            reject(error)
-          }
-          break
+  const promise2 = new CustomPromise((resolve, reject) => {
+    switch (this.status) {
+      // 如果状态为 fulfilled（一开始就调用了 resolve）
+      case STATUS.FULFILLED:
+        try {
+          queueMicrotask(() => {
+            resolvePromise(promise2, null, resolve, reject)
+          })
+        } catch (error) {
+          reject(error)
+        }
+        break
 
-        // 如果状态为 fulfilled（一开始就调用了 resolve）
-        case REJECTED:
-          try {
-            const result = onRejectedCallback(this.value)
-            resolvePromise(promise2, result, resolve, reject)
-          } catch (error) {
-            reject(error)
-          }
-          break
+        // 如果状态为 fulfilled（一开始就调用了 reject））
+      case STATUS.REJECTED:
+        try {
+          queueMicrotask(() => {
+            resolvePromise(promise2, null, resolve, reject)
+          })
+        } catch (error) {
+          reject(error)
+        }
+        break
 
         // 如果状态为 pending，推到队列中等待消费
-        case PENDING:
-          this.onFulfilledCallbacks.push(value => {
-            try {
+      case STATUS.PENDING:
+        this.onFulfilledCallbacks.push(value => {
+          try {
+            queueMicrotask(() => {
               const result = onFulfilledCallback(value)
               resolvePromise(promise2, result, resolve, reject)
-            } catch (error) {
-              reject(error)
-            }
-          })
+            })
+          } catch (error) {
+            reject(error)
+          }
+        })
+
+        if (typeof onRejected === 'function') {
           this.onRejectedCallbacks.push(reason => {
             try {
-              const result = onRejectedCallback(reason)
-              resolvePromise(promise2, result, resolve, reject)
+              queueMicrotask(() => {
+                const result = onRejectedCallback(reason)
+                resolvePromise(promise2, result, resolve, reject)
+              })
             } catch (error) {
               reject(error)
             }
           })
-      }
-    }, 0)
+        }
+    }
   })
 
   return promise2
 }
 
-function isFunction (value) {
-  return typeof value === 'function'
-}
+
 ```
 
-resolvePromise.js：
+resolvePromise：
 
 ```js
-const Promise = require('./Promise')
-
 function resolvePromise (promise2, result, resolve, reject) {
   // 解决循环引用问题
   if (promise2 === result) {
@@ -216,12 +205,16 @@ function resolvePromise (promise2, result, resolve, reject) {
   }
 
   // 处理 result 是 Promise 的情况
-  if (result instanceof Promise) {
+  if (result instanceof CustomPromise) {
     result.then(value => {
       // 递归，因为 value 可能还是 Promise
       resolvePromise(promise2, value, resolve, reject)
     }, reject)
     return
+  }
+
+  const toRawType = val => {
+    return Object.prototype.toString.call(val).slice(8, -1)
   }
 
   // 处理 result 是 thenable 的情况
@@ -239,10 +232,4 @@ function resolvePromise (promise2, result, resolve, reject) {
 
   resolve(result)
 }
-
-function toRawType (val) {
-  return Object.prototype.toString.call(val).slice(8, -1)
-}
-
-module.exports = resolvePromise
 ```
